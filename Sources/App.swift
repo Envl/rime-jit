@@ -1,11 +1,14 @@
 import AppKit
 import Carbon
+import ServiceManagement
 
 @main
 @MainActor
-final class App: NSObject, NSApplicationDelegate {
+final class App: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var status: NSStatusItem!
     private let toggle = NSMenuItem()
+    private let loginItem = NSMenuItem(title: "登录时启动", action: #selector(toggleLoginItem), keyEquivalent: "")
+    private let capturePreference = "captureEnabled"
     private var cache: Snapshot?
     private var monitor: CompositionMonitor?
     private var reader: ScreenReader?
@@ -26,6 +29,9 @@ final class App: NSObject, NSApplicationDelegate {
         toggle.target = self
         toggle.action = #selector(toggleCapture)
         menu.addItem(toggle)
+        menu.delegate = self
+        loginItem.target = self
+        menu.addItem(loginItem)
         menu.addItem(.separator())
         let quit = menu.addItem(withTitle: "退出屏幕候选词", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         quit.target = NSApp
@@ -44,7 +50,33 @@ final class App: NSObject, NSApplicationDelegate {
         center.addObserver(self, selector: #selector(appTerminated(_:)), name: NSWorkspace.didTerminateApplicationNotification, object: nil)
         DistributedNotificationCenter.default().addObserver(self, selector: #selector(inputSourceChanged),
             name: Notification.Name(kTISNotifySelectedKeyboardInputSourceChanged as String), object: nil)
+        if SMAppService.mainApp.status == .enabled && UserDefaults.standard.bool(forKey: capturePreference)
+            && CGPreflightScreenCaptureAccess() {
+            armCapture()
+        }
         render()
+    }
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        let state = SMAppService.mainApp.status
+        loginItem.title = state == .requiresApproval ? "在系统设置中允许登录时启动…" : "登录时启动"
+        loginItem.state = state == .enabled ? .on : .off
+    }
+
+    @objc private func toggleLoginItem() {
+        let service = SMAppService.mainApp
+        do {
+            switch service.status {
+            case .enabled: try service.unregister()
+            case .requiresApproval: SMAppService.openSystemSettingsLoginItems()
+            default:
+                try service.register()
+                if service.status == .requiresApproval { SMAppService.openSystemSettingsLoginItems() }
+            }
+        } catch {
+            if service.status == .requiresApproval { SMAppService.openSystemSettingsLoginItems() }
+            else { show(error) }
+        }
     }
 
     private func render() {
@@ -60,6 +92,7 @@ final class App: NSObject, NSApplicationDelegate {
 
     @objc private func toggleCapture() {
         if monitor != nil {
+            UserDefaults.standard.set(false, forKey: capturePreference)
             stop()
             return
         }
@@ -76,6 +109,7 @@ final class App: NSObject, NSApplicationDelegate {
             return
         }
         armCapture()
+        UserDefaults.standard.set(monitor != nil, forKey: capturePreference)
     }
 
     private func armCapture() {
