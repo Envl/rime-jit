@@ -104,65 +104,90 @@ final class WordIndex {
             let entry = Entry(code: code, word: word)
             if seen.insert(entry).inserted { ordered.append(entry) }
         }
+        var mixedPhrases: [Entry] = []
         var phrases: [Entry] = []
-        func addEnglish(_ word: String, phrase: Bool = false) {
-            guard (2...64).contains(word.utf8.count) else { return }
-            let code = word.filter { $0.isASCII && ($0.isLetter || $0.isNumber) }.lowercased()
-            guard code.count >= 2 else { return }
-            if phrase {
-                let entry = Entry(code: code, word: word)
-                if seen.insert(entry).inserted { phrases.append(entry) }
-            } else {
-                add(code, word)
-            }
+        func englishCode(_ word: String) -> String {
+            word.filter { $0.isASCII && ($0.isLetter || $0.isNumber) }.lowercased()
+        }
+        func chineseCode(_ word: String) -> String? {
+            let key = word as NSString
+            if let cached = codeCache.object(forKey: key) { return cached as String }
+            guard let code = Flypy.code(for: word) else { return nil }
+            codeCache.setObject(code as NSString, forKey: key)
+            return code
         }
         func addChinese(_ word: String) {
-            guard (2...12).contains(word.count) else { return }
-            let key = word as NSString
-            if let code = codeCache.object(forKey: key) { add(code as String, word); return }
-            if let code = Flypy.code(for: word) {
-                codeCache.setObject(code as NSString, forKey: key)
-                add(code, word)
-            }
+            if (2...12).contains(word.count), let code = chineseCode(word) { add(code, word) }
         }
         for line in lines {
             let ns = line as NSString
-            // A tight identifier is one candidate. Spaces can join up to four
-            // neighboring identifiers within this OCR observation.
-            var recent: [NSRange] = []
+            var recent: [(range: NSRange, code: String, isHan: Bool)] = []
+            func appendToken(_ range: NSRange, code: String, isHan: Bool) {
+                if let previous = recent.last {
+                    let end = NSMaxRange(previous.range)
+                    let gap = ns.substring(with: NSRange(location: end, length: range.location - end))
+                    let joins = gap.unicodeScalars.allSatisfy {
+                        $0.properties.generalCategory == .spaceSeparator ||
+                        $0.properties.generalCategory == .dashPunctuation || $0 == "_"
+                    }
+                    if !joins { recent.removeAll() }
+                }
+                if recent.count == 6 { recent.removeFirst() }
+                recent.append((range, code, isHan))
+                var key = "", hasHan = false, hasLatin = false
+                for start in recent.indices.reversed() {
+                    let token = recent[start]
+                    key = token.code + key
+                    hasHan = hasHan || token.isHan
+                    hasLatin = hasLatin || !token.isHan
+                    let span = NSUnionRange(token.range, range)
+                    guard span.length <= 64 else { break }
+                    let count = recent.count - start
+                    guard count >= 2, hasHan || count <= 4 else { continue }
+                    let word = ns.substring(with: span)
+                    guard word.utf8.count <= 128 else { continue }
+                    var lookup = key
+                    if !hasLatin {
+                        // Join separate Han runs across spaces only. Recompute the
+                        // reading as one phrase (e.g. 重 庆) without changing its text.
+                        let compact = word.filter { !$0.isWhitespace }
+                        guard compact.count < word.count, compact.count <= 12,
+                              compact.unicodeScalars.allSatisfy({ !CharacterSet.punctuationCharacters.contains($0) }),
+                              let code = chineseCode(compact) else { continue }
+                        lookup = code
+                    }
+                    let entry = Entry(code: lookup, word: word)
+                    if seen.insert(entry).inserted {
+                        if hasHan && hasLatin { mixedPhrases.append(entry) } else { phrases.append(entry) }
+                    }
+                }
+            }
             for match in runs.matches(in: line, range: NSRange(location: 0, length: ns.length)) {
                 let range = match.range
                 let run = ns.substring(with: range)
                 if run.utf8.first.map({ $0 < 128 }) == true {
-                    addEnglish(run)
-                    let components = run.split { !$0.isLetter && !$0.isNumber }
-                    if components.count > 1 {
-                        for component in components { addEnglish(String(component)) }
+                    let code = englishCode(run)
+                    if (2...64).contains(run.utf8.count), code.count >= 2 { add(code, run) }
+                    for component in run.split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+                        where component.count >= 2 && component.count <= 64 && component.count < run.count {
+                        add(component.lowercased(), String(component))
                     }
-                    if let end = recent.last.map(NSMaxRange) {
-                        let gap = ns.substring(with: NSRange(location: end, length: range.location - end))
-                        let canJoin = gap.unicodeScalars.allSatisfy {
-                            $0.properties.generalCategory == .spaceSeparator ||
-                            $0.properties.generalCategory == .dashPunctuation || $0 == "_"
-                        }
-                        if gap.isEmpty || !canJoin {
-                            recent.removeAll()
-                        }
-                    }
-                    if recent.count == 4 { recent.removeFirst() }
-                    for previous in recent {
-                        let span = NSRange(location: previous.location, length: NSMaxRange(range) - previous.location)
-                        if span.length <= 64 { addEnglish(ns.substring(with: span), phrase: true) }
-                    }
-                    recent.append(range)
+                    appendToken(range, code: code, isHan: false)
                     continue
                 }
-                recent.removeAll()
                 tokens.string = run
                 let parts = tokens.tokens(for: run.startIndex..<run.endIndex)
                 // Keep individual words and short adjacent phrases on the same OCR line.
                 for i in parts.indices {
-                    addChinese(String(run[parts[i]]))
+                    let word = String(run[parts[i]])
+                    if word.count <= 12, let code = chineseCode(word) {
+                        if word.count >= 2 { add(code, word) }
+                        let local = NSRange(parts[i], in: run)
+                        appendToken(NSRange(location: range.location + local.location, length: local.length),
+                                    code: code, isHan: true)
+                    } else {
+                        recent.removeAll()
+                    }
                     for end in (i + 1)..<min(i + 3, parts.count) {
                         let phrase = String(run[parts[i].lowerBound..<parts[end].upperBound])
                         if phrase.count <= 8 { addChinese(phrase) }
@@ -170,6 +195,6 @@ final class WordIndex {
                 }
             }
         }
-        return Array((ordered + phrases).prefix(2000))
+        return Array((ordered + mixedPhrases + phrases).prefix(2000))
     }
 }

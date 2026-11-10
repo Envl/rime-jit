@@ -6,28 +6,50 @@ local function add(index, code, word, seen)
   local prefix = code:sub(1, 2)
   local bucket = index[prefix] or {}
   index[prefix] = bucket
-  bucket[code .. "\t" .. word] = {code = code, word = word, seen = seen}
+  local mixed = word:find("%a") and word:find("[^%z\1-\127]") and #code > #word:gsub("[^%w]", "")
+  local row = {code = code, word = word, seen = seen, mixed = mixed == true}
+  bucket[code .. "\t" .. word] = row
+  return row
+end
+
+-- Allow an exact Chinese tail to recall the adjacent English label in slot two.
+-- The candidate retains the full key for selection and long-term learning.
+local function index_context(context, row)
+  if not row.mixed then return end
+  local label, tail = row.word:match("^([%a%d%._%s%-]+)([^%z\1-\127]+)$")
+  if not label or not label:find("%a") then return end
+  local n = #label:gsub("[^%w]", "")
+  local key = row.code:sub(n + 1)
+  if #key < 6 or #key ~= 2 * (utf8.len(tail) or 0) then return end
+  local bucket = context[key] or {}
+  context[key] = bucket
+  local old = bucket[tail]
+  local rank = row.seen == 0 and math.huge or row.seen
+  if not old or rank > old.rank or (rank == old.rank and
+      (#row.code < #old.code or (#row.code == #old.code and row.word < old.word))) then
+    bucket[tail] = {word = row.word, code = row.code, rank = rank}
+  end
 end
 
 local function read_snapshot(env, now)
   local file = io.open(env.path, "r")
   if not file then
-    env.rows, env.version = {}, nil
+    env.rows, env.context, env.version = {}, {}, nil
     return
   end
   local expiry, version = (file:read("*l") or ""):match("^(%d+)\t([%w%-]+)$")
   if not expiry or tonumber(expiry) <= now then
-    env.rows, env.version = {}, nil
+    env.rows, env.context, env.version = {}, {}, nil
   elseif env.version ~= version then
-    local rows = {}
+    local rows, context = {}, {}
     for line in file:lines() do
       local code, word, seen = line:match("^([a-z0-9_]+)\t([^%c]+)\t(%d+)$")
       if not code then -- Live snapshot written by the earlier helper.
         code, word = line:match("^([a-z0-9_]+)\t([^%c]+)$")
       end
-      if code then add(rows, code, word, tonumber(seen) or 0) end
+      if code then index_context(context, add(rows, code, word, tonumber(seen) or 0)) end
     end
-    env.rows, env.version = rows, version
+    env.rows, env.context, env.version = rows, context, version
   end
   file:close()
 end
@@ -98,10 +120,12 @@ function M.func(input, seg, env)
     if final == "v" and initial:match("[jqxy]") then final = "u" end
     return initial .. final
   end)
+  local context = env.context[flypyKey] or {}
   local matches = {}
   local function collect(bucket)
     for _, row in pairs(bucket or {}) do
-      local query = row.word:byte() >= 128 and flypyKey or key
+      local query = key
+      if not row.word:find("%a") then query = flypyKey end
       local age = row.seen
       if (age <= 0 or age + 300 > now) and
           (row.code == query or (#query >= 3 and row.code:sub(1, #query) == query)) then
@@ -110,7 +134,7 @@ function M.func(input, seg, env)
         local exact = #row.code == #key
         if not old or (exact and not old.exact) or (exact == old.exact and
             (rank > old.rank or (rank == old.rank and row.code < old.code))) then
-          matches[row.word] = {word = row.word, code = row.code, rank = rank, exact = exact}
+          matches[row.word] = {word = row.word, code = row.code, rank = rank, exact = exact, mixed = row.mixed}
         end
       end
     end
@@ -125,14 +149,28 @@ function M.func(input, seg, env)
   table.sort(ordered, function(a, b)
     if a.exact ~= b.exact then return a.exact end
     if a.rank ~= b.rank then return a.rank > b.rank end
+    if a.exact then
+      if a.mixed ~= b.mixed then return a.mixed end
+      local ac, bc = context[a.word], context[b.word]
+      if ac and ac.rank < a.rank then ac = nil end
+      if bc and bc.rank < b.rank then bc = nil end
+      if ac and bc and ac.word ~= bc.word then return ac.word < bc.word end
+      if (ac ~= nil) ~= (bc ~= nil) then return ac ~= nil end
+    end
     if #a.code ~= #b.code then return #a.code < #b.code end
     return a.word < b.word
   end)
+  local best = ordered[1]
+  local expansion = best and best.exact and context[best.word]
+  if expansion and expansion.rank >= best.rank and expansion.rank + 300 > now then
+    ordered[2] = expansion
+  end
   for i = 1, math.min(2, #ordered) do
     local row = ordered[i]
     local label = row.rank == -1 and "记" or "屏"
     local cand = Candidate("screen_words:" .. row.code, seg.start, seg._end, row.word, label)
-    cand.quality = row.exact and 2 or 0.5
+    -- An exact mixed span is direct evidence for the spelling of the whole input.
+    cand.quality = row.exact and (row.mixed and 4 or 2) or 0.5
     yield(cand)
   end
 end

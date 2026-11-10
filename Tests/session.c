@@ -56,6 +56,11 @@ int main(int argc, char **argv) {
         ok = ok && commit_match(api, session, "samplecrea", "sample-creator-toolkit", "屏");
         ok = ok && commit_match(api, session, "shellclick", "Shell Click", "屏");
         ok = ok && commit_match(api, session, "webse", "Web search", "屏");
+        ok = ok && candidate_index(api, session, "datayetsjijpkz", "Data 页统计接口", "屏") == 0;
+        ok = ok && candidate_index(api, session, "yetsjijpkz", "页统计接口", "屏") == 0;
+        ok = ok && commit_match(api, session, "yetsjijpkz", "Data 页统计接口", "屏");
+        ok = ok && commit_match(api, session, "isqkybhh", "重　庆  银行", "屏");
+        ok = ok && commit_match(api, session, "localtools", "Local\u00a0 Tools", "屏");
         int visible = candidate_index(api, session, "rank", "Rank Visible", "屏");
         int recent = candidate_index(api, session, "rank", "Rank Recent", "屏");
         ok = ok && visible >= 0 && recent > visible;
@@ -65,6 +70,8 @@ int main(int argc, char **argv) {
         ok = ok && unlink(argv[3]) == 0;
     }
     // Run once in the original process and once after a real librime restart.
+    ok = ok && commit_match(api, session, "isqkybhh", "重　庆  银行", "记");
+    ok = ok && commit_match(api, session, "datayetsjijpkz", "Data 页统计接口", "记");
     ok = ok && commit_match(api, session, "screencapturekit", "ScreenCaptureKit", "记");
     ok = ok && commit_match(api, session, "samplecre", "sample-creator-toolkit", "记");
     ok = ok && candidate_index(api, session, "rankold", "Rank Old", "记") < 0;

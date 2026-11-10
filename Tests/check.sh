@@ -32,5 +32,5 @@ for mode in seed restart; do
     HOME="$fixture" "$fixture/session" "$squirrel/SharedSupport" "$userdir" "$cache/words.tsv" "$mode"
 done
 selected="$userdir/rime-jit-selected-double_pinyin_flypy.tsv"
-[[ $(wc -l < "$selected") -eq 5 ]]
+[[ $(wc -l < "$selected") -eq 8 ]]
 echo "Five-minute expiry, recency order and selective recall across processes OK"

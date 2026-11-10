@@ -27,7 +27,7 @@ enum Fixture {
         guard let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { fatalError() }
         let lines = try Recognition.lines(using: VNImageRequestHandler(cgImage: cg))
         let index = WordIndex()
-        let entries = index.entries(lines: lines)
+        let entries = index.entries(lines: lines + ["查找 Data 页统计接口", "也统计接口", "重　庆  银行", "Local\u{00A0} Tools"])
         let samples = index.entries(lines: ["Local_API.Client–Kit", "Foo, Bar", "Alpha", "Beta", "Build - Tools"])
         precondition(samples.contains(Entry(code: "localapiclientkit", word: "Local_API.Client–Kit")))
         precondition(samples.contains(Entry(code: "buildtools", word: "Build - Tools")))
@@ -35,6 +35,10 @@ enum Fixture {
         for entry in [Entry(code: "isqkybhh", word: "重庆银行"), Entry(code: "screencapturekit", word: "ScreenCaptureKit")] {
             precondition(entries.contains(entry), "OCR fixture \(lines) missing \(entry)")
         }
+        precondition(entries.contains(Entry(code: "datayetsjijpkz", word: "Data 页统计接口")))
+        let separated = index.entries(lines: ["Data", "页统计接口", "Data。页统计接口", "软 - 件"])
+        precondition(!separated.contains { $0.code == "datayetsjijpkz" })
+        precondition(!separated.contains { $0.word == "软 - 件" })
         let cache = try Snapshot(directory: URL(fileURLWithPath: CommandLine.arguments[1]))
         let now = Date()
         let never = Entry(code: "rankexpired", word: "Rank Expired")
