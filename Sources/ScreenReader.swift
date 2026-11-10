@@ -17,7 +17,7 @@ enum Recognition {
 }
 
 // Each capture session owns its queue and tokenizer. Drop results from stopped sessions in the UI.
-final class ScreenReader: NSObject, SCStreamOutput, SCStreamDelegate {
+private final class DisplayReader: NSObject, SCStreamOutput, SCStreamDelegate {
     private let queue = DispatchQueue(label: "RimeScreenWords.recognition", qos: .utility)
     private let index = WordIndex()
     private var lastLines: [String]?
@@ -30,16 +30,7 @@ final class ScreenReader: NSObject, SCStreamOutput, SCStreamDelegate {
         self.failure = failure
     }
 
-    @MainActor func start(displayID: CGDirectDisplayID) async throws {
-        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-        guard let display = content.displays.first(where: { $0.displayID == displayID }) else {
-            throw NSError(domain: "RimeScreenWords", code: 1,
-                          userInfo: [NSLocalizedDescriptionKey: "找不到所选显示器"])
-        }
-        let excluded = Set(["im.rime.inputmethod.Squirrel", Bundle.main.bundleIdentifier ?? ""])
-        let filter = SCContentFilter(display: display, excludingApplications: content.applications.filter {
-            excluded.contains($0.bundleIdentifier)
-        }, exceptingWindows: [])
+    @MainActor func start(filter: SCContentFilter) async throws {
         let config = SCStreamConfiguration()
         let scale = min(CGFloat(filter.pointPixelScale), 3072 / max(1, filter.contentRect.width))
         config.width = max(1, Int(filter.contentRect.width * scale))
@@ -85,5 +76,105 @@ final class ScreenReader: NSObject, SCStreamOutput, SCStreamDelegate {
         } catch {
             DispatchQueue.main.async { self.failure(error) }
         }
+    }
+}
+
+// Keep each display's most recent result until that display changes or leaves.
+@MainActor
+final class ScreenReader {
+    private struct Capture {
+        let id: UUID
+        let reader: DisplayReader
+        let size: CGSize
+        let scale: Float
+    }
+
+    private let update: ([Entry]) -> Void
+    private let status: (Int, Error?) -> Void
+    private var captures: [CGDirectDisplayID: Capture] = [:]
+    private var words: [CGDirectDisplayID: [Entry]] = [:]
+    private var errors: [CGDirectDisplayID: Error] = [:]
+    private var refreshing = false
+    private var needsRefresh = false
+    private var stopped = false
+
+    init(update: @escaping ([Entry]) -> Void, status: @escaping (Int, Error?) -> Void) {
+        self.update = update
+        self.status = status
+    }
+
+    // Coalesce notifications received while ScreenCaptureKit is enumerating or starting.
+    func refresh(retryFailed: Bool = true) {
+        guard !stopped else { return }
+        if retryFailed { errors.removeAll() }
+        needsRefresh = true
+        guard !refreshing else { return }
+        refreshing = true
+        Task {
+            while needsRefresh && !stopped {
+                needsRefresh = false
+                do {
+                    let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+                    if stopped || needsRefresh { continue }
+                    await reconcile(content)
+                    if !stopped && !needsRefresh { status(captures.count, errors.values.first) }
+                } catch {
+                    if !stopped && !needsRefresh { status(captures.count, error) }
+                }
+            }
+            refreshing = false
+        }
+    }
+
+    private func reconcile(_ content: SCShareableContent) async {
+        let displays = content.displays.filter { CGDisplayMirrorsDisplay($0.displayID) == kCGNullDirectDisplay }
+        let connected = Set(displays.map(\.displayID))
+        errors = errors.filter { connected.contains($0.key) }
+        for id in Set(captures.keys).subtracting(connected) { remove(id) }
+        let excluded = content.applications.filter {
+            $0.bundleIdentifier == "im.rime.inputmethod.Squirrel" || $0.bundleIdentifier == Bundle.main.bundleIdentifier
+        }
+        for display in displays {
+            guard !stopped && !needsRefresh else { return }
+            let id = display.displayID
+            let filter = SCContentFilter(display: display, excludingApplications: excluded, exceptingWindows: [])
+            if let existing = captures[id] {
+                if existing.size == filter.contentRect.size && existing.scale == filter.pointPixelScale { continue }
+                remove(id)
+            }
+            guard errors[id] == nil else { continue }
+            let token = UUID()
+            let reader = DisplayReader(update: { [weak self] entries in
+                guard let self, self.captures[id]?.id == token else { return }
+                self.words[id] = entries
+                self.publish()
+            }, failure: { [weak self] error in
+                guard let self, self.captures[id]?.id == token else { return }
+                self.errors[id] = error
+                self.remove(id)
+                self.refresh(retryFailed: false)
+            })
+            captures[id] = Capture(id: token, reader: reader, size: filter.contentRect.size, scale: filter.pointPixelScale)
+            do { try await reader.start(filter: filter) }
+            catch {
+                if captures[id]?.id == token {
+                    errors[id] = error
+                    remove(id)
+                }
+            }
+        }
+    }
+
+    private func publish() { update(words.values.flatMap { $0 }) }
+
+    private func remove(_ id: CGDirectDisplayID) {
+        guard let capture = captures.removeValue(forKey: id) else { return }
+        if words.removeValue(forKey: id) != nil && !stopped { publish() }
+        Task { await capture.reader.stop() }
+    }
+
+    func stop() {
+        stopped = true
+        for id in Array(captures.keys) { remove(id) }
     }
 }

@@ -9,5 +9,5 @@
 <key>CFBundleShortVersionString</key><string>0.1</string>
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>LSUIElement</key><true/>
-<key>NSScreenCaptureUsageDescription</key><string>读取所选屏幕的可见文字，为小鹤双拼提供本地候选词。</string>
+<key>NSScreenCaptureUsageDescription</key><string>读取所有显示器的可见文字，为小鹤双拼提供本地候选词。</string>
 </dict></plist>

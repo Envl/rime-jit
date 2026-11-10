@@ -10,7 +10,7 @@ final class App: NSObject, NSApplicationDelegate {
     private var reader: ScreenReader?
     private var session = UUID()
     private var timer: Timer?
-    private var pending = false
+    private var captureStatus = ""
 
     static func main() {
         let app = NSApplication.shared
@@ -34,6 +34,8 @@ final class App: NSObject, NSApplicationDelegate {
             .appendingPathComponent("Library/Caches/RimeScreenWords")
         do { cache = try Snapshot(directory: directory) }
         catch { show(error) }
+        NotificationCenter.default.addObserver(self, selector: #selector(screensChanged),
+                                               name: NSApplication.didChangeScreenParametersNotification, object: nil)
         let center = NSWorkspace.shared.notificationCenter
         for event in [NSWorkspace.screensDidSleepNotification, NSWorkspace.sessionDidResignActiveNotification] {
             center.addObserver(self, selector: #selector(stop), name: event, object: nil)
@@ -46,7 +48,7 @@ final class App: NSObject, NSApplicationDelegate {
         toggle.title = active ? "暂停屏幕取词" : "开始屏幕取词"
         toggle.isEnabled = cache != nil
         status.button?.contentTintColor = active ? .systemGreen : nil
-        status.button?.toolTip = pending ? "正在启动屏幕取词" : (active ? "屏幕取词中" : "屏幕取词已暂停")
+        status.button?.toolTip = active ? captureStatus : "屏幕取词已暂停"
     }
 
     @objc private func toggleCapture() {
@@ -70,29 +72,24 @@ final class App: NSObject, NSApplicationDelegate {
             if IsSecureEventInputEnabled() { self.stop(); return }
             do { try self.cache?.replace(entries) }
             catch { self.fail(error) }
-        }, failure: { [weak self] error in
+        }, status: { [weak self] count, error in
             guard let self, self.session == id else { return }
-            self.fail(error)
+            if count == 0, let error { self.fail(error); return }
+            self.captureStatus = count == 0 ? "等待显示器" : "正在从 \(count) 台显示器取词"
+            if let error { self.captureStatus += "。\(error.localizedDescription)" }
+            self.render()
         })
         reader = capture
-        pending = true
+        captureStatus = "正在启动屏幕取词"
         render()
-        let screen = NSScreen.screens.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }
-        let displayID = (screen?.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
-            ?? CGMainDisplayID()
-        Task {
-            do {
-                try await capture.start(displayID: displayID)
-                guard session == id else { await capture.stop(); return }
-                pending = false
-                render()
-                // Common modes keep lease expiry independent of an open menu.
-                let clock = Timer(timeInterval: 1, target: self, selector: #selector(tick), userInfo: nil, repeats: true)
-                RunLoop.main.add(clock, forMode: .common)
-                timer = clock
-            } catch { if session == id { fail(error) } }
-        }
+        capture.refresh()
+        // Common modes keep lease expiry independent of an open menu.
+        let clock = Timer(timeInterval: 1, target: self, selector: #selector(tick), userInfo: nil, repeats: true)
+        RunLoop.main.add(clock, forMode: .common)
+        timer = clock
     }
+
+    @objc private func screensChanged() { reader?.refresh() }
 
     @objc private func tick() {
         if IsSecureEventInputEnabled() { stop(); return }
@@ -104,11 +101,10 @@ final class App: NSObject, NSApplicationDelegate {
         session = UUID()
         let previous = reader
         reader = nil
-        pending = false
         timer?.invalidate()
         timer = nil
         cache?.clear()
-        Task { await previous?.stop() }
+        previous?.stop()
         render()
     }
 
