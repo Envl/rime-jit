@@ -21,7 +21,6 @@ final class App: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         status = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        status.button?.image = NSImage(systemSymbolName: "text.viewfinder", accessibilityDescription: "屏幕候选词")
         let menu = NSMenu()
         toggle.target = self
         toggle.action = #selector(toggleCapture)
@@ -47,7 +46,10 @@ final class App: NSObject, NSApplicationDelegate {
         let active = reader != nil
         toggle.title = active ? "暂停屏幕取词" : "开始屏幕取词"
         toggle.isEnabled = cache != nil
-        status.button?.contentTintColor = active ? .systemGreen : nil
+        let icon = NSImage(systemSymbolName: active ? "text.viewfinder" : "viewfinder",
+                           accessibilityDescription: "屏幕候选词")
+        icon?.isTemplate = true
+        status.button?.image = icon
         status.button?.toolTip = active ? captureStatus : "屏幕取词已暂停"
     }
 
