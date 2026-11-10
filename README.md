@@ -2,6 +2,10 @@
 
 把屏幕上看到的词加入 Rime 候选栏。开启取词后，macOS 菜单栏应用在本机识别屏幕文字；打字时，Rime 的 Lua 翻译器按输入码查词，选中即可上屏。
 
+https://github.com/user-attachments/assets/b22133ab-86ca-425a-8d28-214b834920d4
+
+
+
 本仓库供编码 agent 适配用户现有的 Rime 配置。参考实现使用 macOS 14 及以上版本、鼠须管、librime-lua 和小鹤双拼。换用其他输入方案时，需要核对编码规则、分段标签和方案补丁。
 
 ## 让 agent 接入
