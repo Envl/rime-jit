@@ -34,7 +34,7 @@ static int commit_match(RimeApi *api, RimeSessionId session, const char *keys,
 }
 
 int main(int argc, char **argv) {
-    if (argc != 5) return 2;
+    if (argc != 6) return 2;
     RimeApi *api = rime_get_api();
     const char *modules[] = {"default", "lua", NULL};
     RIME_STRUCT(RimeTraits, traits);
@@ -51,7 +51,18 @@ int main(int argc, char **argv) {
     api->set_option(session, "ascii_mode", False);
     api->set_option(session, "simplification", True);
     if (strcmp(argv[4], "seed") == 0) {
+        const char *activity = argv[5];
+        ok = ok && access(activity, F_OK) != 0;
+        api->process_key(session, 'n', 0);
+        ok = ok && access(activity, F_OK) == 0;
+        api->process_key(session, 0xff1b, 0); // Escape
+        ok = ok && access(activity, F_OK) != 0;
+        api->set_option(session, "ascii_mode", True);
+        api->process_key(session, 'x', 0);
+        ok = ok && access(activity, F_OK) != 0;
+        api->set_option(session, "ascii_mode", False);
         ok = ok && commit_match(api, session, "isqkybhh", "重庆银行", "屏");
+        ok = ok && access(activity, F_OK) != 0;
         ok = ok && commit_match(api, session, "screencap", "ScreenCaptureKit", "屏");
         ok = ok && commit_match(api, session, "samplecrea", "sample-creator-toolkit", "屏");
         ok = ok && commit_match(api, session, "shellclick", "Shell Click", "屏");

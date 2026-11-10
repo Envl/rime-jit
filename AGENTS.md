@@ -20,6 +20,8 @@ The Lua commit hook checks selected or confirmed segments, unwraps the chosen ca
 
 ## 3. Connect producer and translator
 
+When armed, the macOS helper watches the cache subdirectory `activity/`. The Lua translator creates an empty `composing` marker on composition and removes it on commit, clear or teardown. Keep the module and helper in sync. Verify the snapshot disappears on commit and Escape, and that idle input-source selection alone does not start capture.
+
 Both sides must resolve the same local snapshot path. The reference uses `~/Library/Caches/RimeScreenWords/words.tsv`. This UTF-8 format contains a header followed by current and recent rows:
 
 ```text

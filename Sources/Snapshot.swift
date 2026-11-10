@@ -51,6 +51,15 @@ final class Snapshot {
         lastWrite = now
     }
 
+    // End the capture without losing the previous five minutes on the next query.
+    func suspend(now: Date = Date()) {
+        for entry in visible { departed[entry] = now }
+        visible.removeAll()
+        nextExpiry = .distantPast
+        dirty = true
+        try? FileManager.default.removeItem(at: url)
+    }
+
     func clear() {
         try? FileManager.default.removeItem(at: url)
         visible.removeAll()

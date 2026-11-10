@@ -93,12 +93,44 @@ local function remember(env, segment)
   if not written or not closed then log.error("rime-jit: cannot save selected word") end
 end
 
+-- Squirrel owns the current composition. A late clear from another context
+-- must not remove its marker. No input text is written to the activity channel.
+local owner
+local function end_activity(env)
+  if owner == env.activity_id then
+    os.remove(env.marker)
+    owner = nil
+  end
+end
+
+local function update_activity(env, ctx)
+  if not ctx:is_composing() or ctx:get_option("ascii_mode") then
+    end_activity(env)
+    return
+  end
+  -- A new helper or focus change may have cleared our previous marker.
+  if owner == env.activity_id then
+    local existing = io.open(env.marker, "r")
+    if existing then existing:close(); return end
+  end
+  local marker = io.open(env.marker, "w")
+  if marker then marker:close(); owner = env.activity_id end
+end
+
 function M.init(env)
   env.path = os.getenv("HOME") .. "/Library/Caches/RimeScreenWords/words.tsv"
+  env.marker = os.getenv("HOME") .. "/Library/Caches/RimeScreenWords/activity/composing"
+  env.activity_id = {}
+  local ctx = env.engine.context
+  env.activity = ctx.update_notifier:connect(function(ctx) update_activity(env, ctx) end)
+  env.ascii = ctx.option_update_notifier:connect(function(ctx, name)
+    if name == "ascii_mode" then update_activity(env, ctx) end
+  end)
   local schema = env.engine.schema.schema_id:gsub("[^%w_%-]", "_")
   env.selected_path = rime_api.get_user_data_dir() .. "/rime-jit-selected-" .. schema .. ".tsv"
   env.rows, env.selected, env.offset = {}, {}, 0
   env.connection = env.engine.context.commit_notifier:connect(function(ctx)
+    end_activity(env)
     for _, segment in ipairs(ctx.composition:toSegmentation():get_segments()) do
       remember(env, segment)
     end
@@ -106,6 +138,9 @@ function M.init(env)
 end
 
 function M.fini(env)
+  end_activity(env)
+  env.activity:disconnect()
+  env.ascii:disconnect()
   env.connection:disconnect()
 end
 

@@ -49,6 +49,8 @@ enum Fixture {
         // Static content stays visible for ten minutes. Retention starts on departure.
         try cache.heartbeat(now: now.addingTimeInterval(-301))
         try cache.replace([old, recent], now: now.addingTimeInterval(-300))
+        cache.suspend(now: now.addingTimeInterval(-240))
+        precondition(!FileManager.default.fileExists(atPath: cache.url.path))
         try cache.replace([recent], now: now.addingTimeInterval(-240))
         try cache.replace([], now: now.addingTimeInterval(-60))
         try cache.replace(entries + [current], now: now)

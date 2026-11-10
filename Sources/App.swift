@@ -7,6 +7,7 @@ final class App: NSObject, NSApplicationDelegate {
     private var status: NSStatusItem!
     private let toggle = NSMenuItem()
     private var cache: Snapshot?
+    private var monitor: CompositionMonitor?
     private var reader: ScreenReader?
     private var session = UUID()
     private var timer: Timer?
@@ -39,22 +40,29 @@ final class App: NSObject, NSApplicationDelegate {
         for event in [NSWorkspace.screensDidSleepNotification, NSWorkspace.sessionDidResignActiveNotification] {
             center.addObserver(self, selector: #selector(stop), name: event, object: nil)
         }
+        center.addObserver(self, selector: #selector(focusChanged), name: NSWorkspace.didActivateApplicationNotification, object: nil)
+        center.addObserver(self, selector: #selector(appTerminated(_:)), name: NSWorkspace.didTerminateApplicationNotification, object: nil)
+        DistributedNotificationCenter.default().addObserver(self, selector: #selector(inputSourceChanged),
+            name: Notification.Name(kTISNotifySelectedKeyboardInputSourceChanged as String), object: nil)
         render()
     }
 
     private func render() {
         let active = reader != nil
-        toggle.title = active ? "暂停屏幕取词" : "开始屏幕取词"
+        toggle.title = monitor != nil ? "暂停屏幕取词" : "开始屏幕取词"
         toggle.isEnabled = cache != nil
         let icon = NSImage(systemSymbolName: active ? "text.viewfinder" : "viewfinder",
                            accessibilityDescription: "屏幕候选词")
         icon?.isTemplate = true
         status.button?.image = icon
-        status.button?.toolTip = active ? captureStatus : "屏幕取词已暂停"
+        status.button?.toolTip = active ? captureStatus : (monitor == nil ? "屏幕取词已暂停" : "等待 Rime 输入")
     }
 
     @objc private func toggleCapture() {
-        if reader != nil { stop(); return }
+        if monitor != nil {
+            stop()
+            return
+        }
         guard CGPreflightScreenCaptureAccess() || CGRequestScreenCaptureAccess() else {
             let alert = NSAlert()
             alert.messageText = "需要屏幕录制权限"
@@ -67,11 +75,50 @@ final class App: NSObject, NSApplicationDelegate {
             }
             return
         }
+        armCapture()
+    }
+
+    private func armCapture() {
+        guard let cache else { return }
+        do {
+            monitor = try CompositionMonitor(cacheDirectory: cache.url.deletingLastPathComponent()) { [weak self] in
+                self?.compositionChanged()
+            }
+            compositionChanged()
+            render()
+        } catch { fail(error) }
+    }
+
+    private var squirrelSelected: Bool {
+        let source = TISCopyCurrentKeyboardInputSource().takeRetainedValue()
+        guard let value = TISGetInputSourceProperty(source, kTISPropertyBundleID) else { return false }
+        return Unmanaged<CFString>.fromOpaque(value).takeUnretainedValue() as String == "im.rime.inputmethod.Squirrel"
+    }
+
+    @objc private func focusChanged() {
+        monitor?.reset()
+        endComposition()
+    }
+
+    @objc private func inputSourceChanged() {
+        if !squirrelSelected { focusChanged() }
+    }
+
+    @objc private func appTerminated(_ note: Notification) {
+        let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+        if app?.bundleIdentifier == "im.rime.inputmethod.Squirrel" { focusChanged() }
+    }
+
+    private func compositionChanged() {
+        guard monitor?.isComposing == true && squirrelSelected else { endComposition(); return }
+        if IsSecureEventInputEnabled() { stop(); return }
+        guard reader == nil else { return }
         let id = UUID()
         session = id
         let capture = ScreenReader(update: { [weak self] entries in
             guard let self, self.session == id else { return }
             if IsSecureEventInputEnabled() { self.stop(); return }
+            guard self.monitor?.isComposing == true else { self.endComposition(); return }
             do { try self.cache?.replace(entries) }
             catch { self.fail(error) }
         }, status: { [weak self] count, error in
@@ -84,6 +131,7 @@ final class App: NSObject, NSApplicationDelegate {
         reader = capture
         captureStatus = "正在启动屏幕取词"
         render()
+        do { try cache?.heartbeat() } catch { fail(error); return }
         capture.refresh()
         // Common modes keep lease expiry independent of an open menu.
         let clock = Timer(timeInterval: 1, target: self, selector: #selector(tick), userInfo: nil, repeats: true)
@@ -95,18 +143,28 @@ final class App: NSObject, NSApplicationDelegate {
 
     @objc private func tick() {
         if IsSecureEventInputEnabled() { stop(); return }
+        guard monitor?.isComposing == true && squirrelSelected else { endComposition(); return }
         do { try cache?.heartbeat() }
         catch { fail(error) }
     }
 
-    @objc private func stop() {
+    private func endComposition() {
+        guard reader != nil else { return }
         session = UUID()
         let previous = reader
         reader = nil
         timer?.invalidate()
         timer = nil
-        cache?.clear()
         previous?.stop()
+        cache?.suspend()
+        render()
+    }
+
+    @objc private func stop() {
+        monitor?.stop()
+        monitor = nil
+        endComposition()
+        cache?.clear()
         render()
     }
 
@@ -120,5 +178,5 @@ final class App: NSObject, NSApplicationDelegate {
         alert.runModal()
     }
 
-    func applicationWillTerminate(_ notification: Notification) { cache?.clear() }
+    func applicationWillTerminate(_ notification: Notification) { stop() }
 }

@@ -28,8 +28,9 @@ xcrun --sdk macosx clang -isysroot "$(xcrun --show-sdk-path)" -I"$fixture" Tests
     -Wl,-rpath,"$frameworks/rime-plugins" -o "$fixture/session"
 xcrun swiftc -O -parse-as-library Sources/{WordIndex,Snapshot,ScreenReader}.swift Tests/Fixture.swift -o "$fixture/fixture"
 "$fixture/fixture" "$cache"
+mkdir "$cache/activity"
 for mode in seed restart; do
-    HOME="$fixture" "$fixture/session" "$squirrel/SharedSupport" "$userdir" "$cache/words.tsv" "$mode"
+    HOME="$fixture" "$fixture/session" "$squirrel/SharedSupport" "$userdir" "$cache/words.tsv" "$mode" "$cache/activity/composing"
 done
 selected="$userdir/rime-jit-selected-double_pinyin_flypy.tsv"
 [[ $(wc -l < "$selected") -eq 8 ]]

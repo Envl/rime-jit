@@ -22,6 +22,7 @@ private final class DisplayReader: NSObject, SCStreamOutput, SCStreamDelegate {
     private let index = WordIndex()
     private var lastLines: [String]?
     private var stream: SCStream?
+    private var starting = false
     let update: ([Entry]) -> Void
     let failure: (Error) -> Void
 
@@ -42,13 +43,17 @@ private final class DisplayReader: NSObject, SCStreamOutput, SCStreamDelegate {
         let capture = SCStream(filter: filter, configuration: config, delegate: self)
         try capture.addStreamOutput(self, type: .screen, sampleHandlerQueue: queue)
         stream = capture
+        starting = true
+        defer { starting = false }
         try await capture.startCapture()
+        // Commit or Escape may arrive before ScreenCaptureKit finishes starting.
+        if stream == nil { try? await capture.stopCapture() }
     }
 
     @MainActor func stop() async {
         let capture = stream
         stream = nil
-        try? await capture?.stopCapture()
+        if !starting { try? await capture?.stopCapture() }
     }
 
     func stream(_ stream: SCStream, didStopWithError error: Error) {
