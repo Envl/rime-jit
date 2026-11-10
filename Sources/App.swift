@@ -67,7 +67,8 @@ final class App: NSObject, NSApplicationDelegate {
         session = id
         let capture = ScreenReader(update: { [weak self] entries in
             guard let self, self.session == id else { return }
-            do { try self.cache?.replace(IsSecureEventInputEnabled() ? [] : entries) }
+            if IsSecureEventInputEnabled() { self.stop(); return }
+            do { try self.cache?.replace(entries) }
             catch { self.fail(error) }
         }, failure: { [weak self] error in
             guard let self, self.session == id else { return }

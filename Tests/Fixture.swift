@@ -36,7 +36,21 @@ enum Fixture {
             precondition(entries.contains(entry), "OCR fixture \(lines) missing \(entry)")
         }
         let cache = try Snapshot(directory: URL(fileURLWithPath: CommandLine.arguments[1]))
-        try cache.replace(entries)
+        let now = Date()
+        let never = Entry(code: "rankexpired", word: "Rank Expired")
+        let old = Entry(code: "rankold", word: "Rank Old")
+        let recent = Entry(code: "rankrecent", word: "Rank Recent")
+        let current = Entry(code: "rankvisible", word: "Rank Visible")
+        try cache.replace([never, old, recent], now: now.addingTimeInterval(-900))
+        // Static content stays visible for ten minutes. Retention starts on departure.
+        try cache.heartbeat(now: now.addingTimeInterval(-301))
+        try cache.replace([old, recent], now: now.addingTimeInterval(-300))
+        try cache.replace([recent], now: now.addingTimeInterval(-240))
+        try cache.replace([], now: now.addingTimeInterval(-60))
+        try cache.replace(entries + [current], now: now)
+        let contents = try String(contentsOf: cache.url, encoding: .utf8)
+        precondition(!contents.contains("Rank Expired") && contents.contains("Rank Old"))
+        precondition(contents.contains("Rank Recent") && contents.contains("rankvisible\tRank Visible\t0"))
         print("Vision fixture, word extraction, polyphonic readings and snapshot OK")
     }
 }

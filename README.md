@@ -10,7 +10,9 @@ This repository gives coding agents a working implementation to adapt to a user'
 | Shell Click | `shellclick` | Shell Click |
 | sample-creator-toolkit | `samplecrea` | sample-creator-toolkit |
 
-English matching ignores case, spaces, dashes, underscores, and periods. Selection commits the original spelling. The reference translator offers up to two screen candidates labeled **屏**, with prefix matching from three letters.
+English matching ignores case, spaces, dashes, underscores, and periods. Selection commits the original spelling. The translator offers up to two candidates, with prefix matching from three letters. A word stays eligible while visible and for five minutes after leaving the screen. Within the same match class (exact or prefix), visible words lead, then recently seen words in order of last appearance.
+
+Selecting and committing a **屏** candidate saves its full lookup key and committed spelling for this schema. It can appear as **记** after the five-minute window, after capture stops, and after Squirrel restarts. Merely seeing or highlighting a word does not save it.
 
 ## Give this to your agent
 
@@ -34,9 +36,11 @@ With Squirrel 1.1.2 in its standard system location, `make check` exercises Visi
 
 ## Capture and local data
 
-Choose **开始屏幕取词** from the menu bar and grant macOS Screen Recording permission to **RimeScreenWords**. The app processes frames in memory and writes recognized words and lookup keys to `~/Library/Caches/RimeScreenWords/words.tsv`. This plaintext file can contain visible personal text. Screen recognition and candidate lookup run locally.
+Choose **开始屏幕取词** from the menu bar and grant macOS Screen Recording permission to **RimeScreenWords**. The app processes frames in memory and writes current and recent words and lookup keys to `~/Library/Caches/RimeScreenWords/words.tsv`. This plaintext file can contain visible personal text. Screen recognition and candidate lookup run locally.
 
 Choose **暂停屏幕取词** to pause and remove the snapshot. Normal app exit also removes it. After an abnormal exit, the file can remain on disk, and the translator ignores it once its 12-second lease expires. Changes appear the next time Rime queries the translator.
+
+Long-term selections are stored separately in the Rime user directory as `rime-jit-selected-<schema_id>.tsv`. To forget them, quit the input method, remove that schema’s TSV file, then reopen the input method. Pausing capture clears the rolling screen history while keeping deliberate selections. Both files contain readable text.
 
 ## License
 

@@ -16,16 +16,18 @@ The Lua translator currently handles the `abc` segment tag and lowercase Latin i
 
 On other platforms, supply a capture and OCR producer appropriate for that frontend. The included producer uses macOS ScreenCaptureKit, Vision, and the standard system Squirrel dictionary path.
 
+The Lua commit hook checks selected or confirmed segments, unwraps the chosen candidate and retrieves its full lookup key from its type. It saves only explicitly committed screen candidates to a schema-scoped TSV in the user directory. Keep that key attached when adapting filters or implementing a different encoder. Prefix selections must retain the full key for future lookup. A captured example used in tests should always be synthetic.
+
 ## 3. Connect producer and translator
 
-Both sides must resolve the same local snapshot path. The reference uses `~/Library/Caches/RimeScreenWords/words.tsv`. This UTF-8 format contains a header followed by up to 2,000 rows:
+Both sides must resolve the same local snapshot path. The reference uses `~/Library/Caches/RimeScreenWords/words.tsv`. This UTF-8 format contains a header followed by current and recent rows:
 
 ```text
 <expiry as Unix seconds><TAB><version>
-<lookup key><TAB><original candidate text>
+<lookup key><TAB><original candidate text><TAB><last seen>
 ```
 
-Use a new version when the rows change, atomically replace the file, and renew expiry while capture is active. Use ASCII letters or digits for compact keys and keep control characters out of candidate text. The translator also accepts underscores in stored keys. On stop, clear the snapshot. Keep captured text out of logs, fixtures, issue reports, and Rime sync folders.
+A last-seen value of zero means currently visible. On departure, stamp the entry with Unix seconds and keep it for 300 seconds. Each OCR result contributes up to 2,000 entries. The translator also reads older two-field snapshots as currently visible. Use a new version when the rows change, atomically replace the file, and renew expiry while capture is active. Use ASCII letters or digits for compact keys and keep control characters out of candidate text. The translator also accepts underscores in stored keys. On stop, clear the snapshot. Keep captured text out of logs, fixtures, issue reports, and Rime sync folders.
 
 Copy the Lua module into the target's user Lua module directory and register it once with the active schema. For the reference configuration with no conflicting patch key:
 
@@ -42,7 +44,7 @@ If the user already customizes the translator sequence, append to their effectiv
 
 1. Run `make build` and `make check` on a compatible Mac to establish the reference behavior.
 2. Stage the target schema, its dependencies and existing patches in a temporary Rime directory. Apply the integration there. Confirm the compiled schema contains the translator once and retains the original translators and filters.
-3. Use synthetic text in the snapshot. In an isolated librime session with matching module paths, type a known Chinese code and an English prefix across a separator. Assert the candidate is selectable and commits the exact original text. The reference harness in `Tests/session.c` demonstrates this. Check ordinary candidates when capture is paused.
+3. Use synthetic text in the snapshot. In an isolated librime session with matching module paths, type a known Chinese code and an English prefix across a separator. Assert the candidate is selectable and commits the exact original text. The reference harness in `Tests/session.c` demonstrates this. Check ordinary candidates when capture is paused. Verify that an unselected word expires and a selected word can still be committed from a fresh process with no screen snapshot.
 4. Apply the verified changes to the user's intended schema, redeploy through their frontend, and run the helper. Have the user enable capture on the desired display and try a visible phrase in a text field. Record whether validation covered the library, the actual frontend, or both.
 
 To undo the integration, stop the helper, remove the translator entry and the Lua module added for it, then redeploy. If a previously existing module was adapted, restore its previous contents.

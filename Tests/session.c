@@ -3,20 +3,27 @@
 #include <unistd.h>
 #include "rime_api.h"
 
-static int commit_match(RimeApi *api, RimeSessionId session, const char *keys, const char *expected) {
+static int candidate_index(RimeApi *api, RimeSessionId session, const char *keys,
+                           const char *expected, const char *label) {
     api->clear_composition(session);
     for (const char *key = keys; *key; ++key) api->process_key(session, *key, 0);
     RIME_STRUCT(RimeContext, ctx);
-    if (!api->get_context(session, &ctx)) return 0;
+    if (!api->get_context(session, &ctx)) return -1;
     int found = -1;
     for (int i = 0; i < ctx.menu.num_candidates; i++) {
         RimeCandidate candidate = ctx.menu.candidates[i];
-        if (!strcmp(candidate.text, expected) && candidate.comment && strstr(candidate.comment, "屏")) {
+        if (!strcmp(candidate.text, expected) && candidate.comment && strstr(candidate.comment, label)) {
             found = i;
             break;
         }
     }
     api->free_context(&ctx);
+    return found;
+}
+
+static int commit_match(RimeApi *api, RimeSessionId session, const char *keys,
+                        const char *expected, const char *label) {
+    int found = candidate_index(api, session, keys, expected, label);
     if (found < 0 || !api->select_candidate_on_current_page(session, found)) return 0;
     RIME_STRUCT(RimeCommit, commit);
     if (!api->get_commit(session, &commit)) return 0;
@@ -27,7 +34,7 @@ static int commit_match(RimeApi *api, RimeSessionId session, const char *keys, c
 }
 
 int main(int argc, char **argv) {
-    if (argc != 4) return 2;
+    if (argc != 5) return 2;
     RimeApi *api = rime_get_api();
     const char *modules[] = {"default", "lua", NULL};
     RIME_STRUCT(RimeTraits, traits);
@@ -43,18 +50,24 @@ int main(int argc, char **argv) {
     int ok = api->select_schema(session, "double_pinyin_flypy");
     api->set_option(session, "ascii_mode", False);
     api->set_option(session, "simplification", True);
-    ok = ok && commit_match(api, session, "isqkybhh", "重庆银行");
-    ok = ok && commit_match(api, session, "screencap", "ScreenCaptureKit");
-    ok = ok && commit_match(api, session, "samplecrea", "sample-creator-toolkit");
-    ok = ok && commit_match(api, session, "shellclick", "Shell Click");
-    ok = ok && commit_match(api, session, "webse", "Web search");
-    if (ok && unlink(argv[3]) == 0) {
-        // Query the same Lua environment again after the producer pauses.
-        ok = !commit_match(api, session, "screencap", "ScreenCaptureKit");
-        if (ok) puts("Pausing removes screen candidates in the same session");
-    } else {
-        ok = 0;
+    if (strcmp(argv[4], "seed") == 0) {
+        ok = ok && commit_match(api, session, "isqkybhh", "重庆银行", "屏");
+        ok = ok && commit_match(api, session, "screencap", "ScreenCaptureKit", "屏");
+        ok = ok && commit_match(api, session, "samplecrea", "sample-creator-toolkit", "屏");
+        ok = ok && commit_match(api, session, "shellclick", "Shell Click", "屏");
+        ok = ok && commit_match(api, session, "webse", "Web search", "屏");
+        int visible = candidate_index(api, session, "rank", "Rank Visible", "屏");
+        int recent = candidate_index(api, session, "rank", "Rank Recent", "屏");
+        ok = ok && visible >= 0 && recent > visible;
+        ok = ok && candidate_index(api, session, "rank", "Rank Old", "屏") < 0;
+        ok = ok && candidate_index(api, session, "rankold", "Rank Old", "屏") >= 0;
+        ok = ok && candidate_index(api, session, "rankexpired", "Rank Expired", "屏") < 0;
+        ok = ok && unlink(argv[3]) == 0;
     }
+    // Run once in the original process and once after a real librime restart.
+    ok = ok && commit_match(api, session, "screencapturekit", "ScreenCaptureKit", "记");
+    ok = ok && commit_match(api, session, "samplecre", "sample-creator-toolkit", "记");
+    ok = ok && candidate_index(api, session, "rankold", "Rank Old", "记") < 0;
     api->destroy_session(session);
     api->finalize();
     if (!ok) fprintf(stderr, "Expected screen candidate missing from first page or failed to commit\n");

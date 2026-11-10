@@ -1,9 +1,15 @@
 import Foundation
 
 final class Snapshot {
+    private static let retention: TimeInterval = 300
     let url: URL
+    private var visible = Set<Entry>()
+    // A visible word stays fresh even when ScreenCaptureKit sends only idle frames.
+    private var departed: [Entry: Date] = [:]
+    private var nextExpiry = Date.distantFuture
     private var rows = ""
     private var version = UUID().uuidString
+    private var dirty = true
     private var lastWrite = Date.distantPast
 
     init(directory: URL) throws {
@@ -13,18 +19,32 @@ final class Snapshot {
         clear()
     }
 
-    func replace(_ entries: [Entry]) throws {
-        let newRows = entries.map { "\($0.code)\t\($0.word)\n" }.joined()
-        if rows != newRows {
-            rows = newRows
-            version = UUID().uuidString
-            lastWrite = .distantPast
+    func replace(_ entries: [Entry], now: Date = Date()) throws {
+        let current = Set(entries)
+        if current != visible {
+            for entry in visible.subtracting(current) { departed[entry] = now }
+            for entry in current { departed.removeValue(forKey: entry) }
+            visible = current
+            dirty = true
         }
-        try heartbeat()
+        try heartbeat(now: now)
     }
 
-    func heartbeat() throws {
-        let now = Date()
+    func heartbeat(now: Date = Date()) throws {
+        if now >= nextExpiry {
+            departed = departed.filter { now.timeIntervalSince($0.value) < Self.retention }
+            dirty = true
+        }
+        if dirty {
+            rows = visible.map { "\($0.code)\t\($0.word)\t0\n" }.joined()
+            for (entry, lastSeen) in departed {
+                rows += "\(entry.code)\t\(entry.word)\t\(Int(lastSeen.timeIntervalSince1970))\n"
+            }
+            nextExpiry = departed.values.min()?.addingTimeInterval(Self.retention) ?? .distantFuture
+            version = UUID().uuidString
+            dirty = false
+            lastWrite = .distantPast
+        }
         guard now.timeIntervalSince(lastWrite) >= 4 else { return }
         let content = "\(Int(now.timeIntervalSince1970) + 12)\t\(version)\n" + rows
         try Data(content.utf8).write(to: url, options: .atomic)
@@ -33,8 +53,11 @@ final class Snapshot {
 
     func clear() {
         try? FileManager.default.removeItem(at: url)
+        visible.removeAll()
+        departed.removeAll()
+        nextExpiry = .distantFuture
         rows = ""
-        version = UUID().uuidString
+        dirty = true
         lastWrite = .distantPast
     }
 }
